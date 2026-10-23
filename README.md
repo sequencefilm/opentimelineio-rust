@@ -618,7 +618,9 @@ Objects follow clear ownership rules across the FFI boundary:
 | `track.append_clip(clip)` | Track takes ownership (Clip consumed via `mem::forget`) |
 | Iterator items (`ClipRef`, `TrackRef`) | Non-owning references (lifetime tied to parent) |
 
-When appending/inserting children, ownership transfers to C++ and Rust's destructor is bypassed:
+Each owning handle holds one OpenTimelineIO managed reference, taken when the shim creates or loads the object and released by its `Drop`. OpenTimelineIO deletes an object as soon as its reference count returns to 0, and calls such as `to_json_string` briefly retain and release the object they act on, so a handle without its own reference would be deleted by the first such call.
+
+When appending/inserting children, the parent takes its own reference, the shim releases the handle's reference, and Rust's destructor is bypassed:
 
 ```rust
 pub fn append_clip(&mut self, child: Clip) -> Result<()> {

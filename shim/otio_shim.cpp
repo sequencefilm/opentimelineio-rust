@@ -22,12 +22,45 @@
 
 #include <cstring>
 #include <exception>
+#include <vector>
 
 namespace otio = opentimelineio::OPENTIMELINEIO_VERSION;
 
 // Use Retainer for reference-counted pointers
 template <typename T>
 using Retainer = otio::SerializableObject::Retainer<T>;
+
+// ============================================================================
+// Handle ownership
+// ============================================================================
+//
+// Every pointer returned by a *_create or JSON load function owns one OTIO
+// managed reference, released by the matching *_free. OTIO deletes an object
+// whenever its count falls back to 0, and many OTIO calls take a transient
+// Retainer on the object they act on (to_json_string wraps `this` in one), so
+// a handle at count 0, which is what Retainer::take_value leaves behind, would
+// be deleted by the first such call while Rust still holds it.
+//
+// Functions that hand a child to a parent (append, insert, set_*_reference,
+// add_marker, add_effect, ...) release the handle's reference once the parent
+// holds its own, because the Rust side forgets the handle on success. On
+// failure the handle keeps its reference and the Rust side frees it.
+
+template <typename T>
+static T* retain_for_handle(T* so) {
+    Retainer<T> retainer(so);
+    // detach without releasing, so the reference stays with the handle
+    T* ptr = retainer.value;
+    retainer.value = nullptr;
+    return ptr;
+}
+
+static void release_handle(otio::SerializableObject* so) {
+    // adopt the handle's reference; the destructor releases it and deletes
+    // the object if no parent holds another
+    Retainer<otio::SerializableObject> retainer;
+    retainer.value = so;
+}
 
 // ============================================================================
 // Helper Macros - Reduce boilerplate and ensure consistent error handling
@@ -205,6 +238,7 @@ static int append_child_impl(Container* container, Child* child, OtioError* err)
         otio::ErrorStatus status;
         container->append_child(child, &status);
         OTIO_CHECK_STATUS(status, err);
+        release_handle(child);
         return 0;
     } catch (const std::exception& e) {
         set_error(err, 1, e.what());
@@ -223,6 +257,7 @@ static int insert_child_impl(Container* container, int32_t index, Child* child, 
         otio::ErrorStatus status;
         container->insert_child(index, child, &status);
         OTIO_CHECK_STATUS(status, err);
+        release_handle(child);
         return 0;
     } catch (const std::exception& e) {
         set_error(err, 1, e.what());
@@ -326,8 +361,7 @@ OtioTimeline* otio_timeline_create(const char* name) {
     OTIO_TRY_PTR(
         auto tl = new otio::Timeline(name);
         tl->set_tracks(new otio::Stack());
-        Retainer<otio::Timeline> retainer(tl);
-        return reinterpret_cast<OtioTimeline*>(retainer.take_value());
+        return reinterpret_cast<OtioTimeline*>(retain_for_handle(tl));
     )
 }
 
@@ -335,7 +369,7 @@ void otio_timeline_free(OtioTimeline* tl) {
     if (tl) {
         try {
             OTIO_CAST(Timeline, timeline, tl);
-            Retainer<otio::Timeline> retainer(timeline);
+            release_handle(timeline);
         } catch (...) {
             // Ignore exceptions during cleanup
         }
@@ -390,8 +424,7 @@ OtioTrack* otio_track_create_video(const char* name) {
     OTIO_NULL_CHECK(name, nullptr);
     OTIO_TRY_PTR(
         auto track = new otio::Track(name, std::nullopt, otio::Track::Kind::video);
-        Retainer<otio::Track> retainer(track);
-        return reinterpret_cast<OtioTrack*>(retainer.take_value());
+        return reinterpret_cast<OtioTrack*>(retain_for_handle(track));
     )
 }
 
@@ -399,8 +432,7 @@ OtioTrack* otio_track_create_audio(const char* name) {
     OTIO_NULL_CHECK(name, nullptr);
     OTIO_TRY_PTR(
         auto track = new otio::Track(name, std::nullopt, otio::Track::Kind::audio);
-        Retainer<otio::Track> retainer(track);
-        return reinterpret_cast<OtioTrack*>(retainer.take_value());
+        return reinterpret_cast<OtioTrack*>(retain_for_handle(track));
     )
 }
 
@@ -408,7 +440,7 @@ void otio_track_free(OtioTrack* track) {
     if (track) {
         try {
             OTIO_CAST(Track, t, track);
-            Retainer<otio::Track> retainer(t);
+            release_handle(t);
         } catch (...) {
             // Ignore exceptions during cleanup
         }
@@ -529,8 +561,7 @@ OtioClip* otio_clip_create(const char* name, OtioTimeRange source_range) {
     OTIO_NULL_CHECK(name, nullptr);
     OTIO_TRY_PTR(
         auto clip = new otio::Clip(name, nullptr, to_otio_tr(source_range));
-        Retainer<otio::Clip> retainer(clip);
-        return reinterpret_cast<OtioClip*>(retainer.take_value());
+        return reinterpret_cast<OtioClip*>(retain_for_handle(clip));
     )
 }
 
@@ -541,6 +572,7 @@ int otio_clip_set_media_reference(OtioClip* clip, OtioExternalRef* ref, OtioErro
         OTIO_CAST(Clip, c, clip);
         OTIO_CAST(ExternalReference, r, ref);
         c->set_media_reference(r);
+        release_handle(r);
     )
 }
 
@@ -686,10 +718,21 @@ int otio_clip_add_media_reference(OtioClip* clip, const char* key,
         }
         // Get existing references and add the new one
         auto refs = c->media_references();
+        // set_media_references clears the clip's map before refilling it, and
+        // the clip holds the only reference to its current media references,
+        // so retain them until the call returns or they are deleted and then
+        // re-inserted as dangling pointers
+        std::vector<Retainer<otio::MediaReference>> existing;
+        for (auto const& entry: refs) {
+            existing.emplace_back(entry.second);
+        }
         refs[key] = media_ref;
         // Keep the current active key
         std::string active_key = c->active_media_reference_key();
-        c->set_media_references(refs, active_key);
+        otio::ErrorStatus status;
+        c->set_media_references(refs, active_key, &status);
+        OTIO_CHECK_STATUS(status, err);
+        release_handle(media_ref);
         return 0;
     } catch (const std::exception& e) {
         set_error(err, 1, e.what());
@@ -721,8 +764,7 @@ OtioGap* otio_gap_create(OtioRationalTime duration) {
             otio::RationalTime(0, duration.rate),
             to_otio_rt(duration)
         ));
-        Retainer<otio::Gap> retainer(gap);
-        return reinterpret_cast<OtioGap*>(retainer.take_value());
+        return reinterpret_cast<OtioGap*>(retain_for_handle(gap));
     )
 }
 
@@ -742,8 +784,7 @@ OtioExternalRef* otio_external_ref_create(const char* target_url) {
     OTIO_NULL_CHECK(target_url, nullptr);
     OTIO_TRY_PTR(
         auto ref = new otio::ExternalReference(target_url);
-        Retainer<otio::ExternalReference> retainer(ref);
-        return reinterpret_cast<OtioExternalRef*>(retainer.take_value());
+        return reinterpret_cast<OtioExternalRef*>(retain_for_handle(ref));
     )
 }
 
@@ -756,10 +797,14 @@ int otio_external_ref_set_available_range(OtioExternalRef* ref, OtioTimeRange ra
 }
 
 void otio_external_ref_free(OtioExternalRef* ref) {
-    // ExternalReferences are typically owned by clips via set_media_reference.
-    // This function exists for API completeness but the reference is managed
-    // by OTIO's reference counting when attached to a clip.
-    (void)ref;
+    if (ref) {
+        try {
+            OTIO_CAST(ExternalReference, r, ref);
+            release_handle(r);
+        } catch (...) {
+            // Ignore exceptions during cleanup
+        }
+    }
 }
 
 // ----------------------------------------------------------------------------
@@ -770,8 +815,7 @@ OtioStack* otio_stack_create(const char* name) {
     OTIO_NULL_CHECK(name, nullptr);
     OTIO_TRY_PTR(
         auto stack = new otio::Stack(name);
-        Retainer<otio::Stack> retainer(stack);
-        return reinterpret_cast<OtioStack*>(retainer.take_value());
+        return reinterpret_cast<OtioStack*>(retain_for_handle(stack));
     )
 }
 
@@ -779,7 +823,7 @@ void otio_stack_free(OtioStack* stack) {
     if (stack) {
         try {
             OTIO_CAST(Stack, s, stack);
-            Retainer<otio::Stack> retainer(s);
+            release_handle(s);
         } catch (...) {
             // Ignore exceptions during cleanup
         }
@@ -906,8 +950,7 @@ OtioTimeline* otio_timeline_read_from_file(const char* path, OtioError* err) {
             Retainer<otio::SerializableObject> retainer(result);
             return nullptr;
         }
-        Retainer<otio::Timeline> retainer(timeline);
-        return reinterpret_cast<OtioTimeline*>(retainer.take_value());
+        return reinterpret_cast<OtioTimeline*>(retain_for_handle(timeline));
     } catch (const std::exception& e) {
         set_error(err, 1, e.what());
         return nullptr;
@@ -958,8 +1001,7 @@ OtioTimeline* otio_timeline_from_json_string(const char* json, OtioError* err) {
             Retainer<otio::SerializableObject> retainer(result);
             return nullptr;
         }
-        Retainer<otio::Timeline> retainer(timeline);
-        return reinterpret_cast<OtioTimeline*>(retainer.take_value());
+        return reinterpret_cast<OtioTimeline*>(retain_for_handle(timeline));
     } catch (const std::exception& e) {
         set_error(err, 1, e.what());
         return nullptr;
@@ -1118,8 +1160,7 @@ OtioMarker* otio_marker_create(const char* name, OtioTimeRange marked_range, con
     const char* c = color ? color : otio::Marker::Color::green;
     OTIO_TRY_PTR(
         auto marker = new otio::Marker(name, to_otio_tr(marked_range), c);
-        Retainer<otio::Marker> retainer(marker);
-        return reinterpret_cast<OtioMarker*>(retainer.take_value());
+        return reinterpret_cast<OtioMarker*>(retain_for_handle(marker));
     )
 }
 
@@ -1127,7 +1168,7 @@ void otio_marker_free(OtioMarker* marker) {
     if (marker) {
         try {
             OTIO_CAST(Marker, m, marker);
-            Retainer<otio::Marker> retainer(m);
+            release_handle(m);
         } catch (...) {
         }
     }
@@ -1215,8 +1256,7 @@ OtioEffect* otio_effect_create(const char* name, const char* effect_name) {
     const char* en = effect_name ? effect_name : "";
     OTIO_TRY_PTR(
         auto effect = new otio::Effect(n, en);
-        Retainer<otio::Effect> retainer(effect);
-        return reinterpret_cast<OtioEffect*>(retainer.take_value());
+        return reinterpret_cast<OtioEffect*>(retain_for_handle(effect));
     )
 }
 
@@ -1224,7 +1264,7 @@ void otio_effect_free(OtioEffect* effect) {
     if (effect) {
         try {
             OTIO_CAST(Effect, e, effect);
-            Retainer<otio::Effect> retainer(e);
+            release_handle(e);
         } catch (...) {
         }
     }
@@ -1273,8 +1313,7 @@ OtioTransition* otio_transition_create(const char* name, const char* transition_
     const char* tt = transition_type ? transition_type : otio::Transition::Type::SMPTE_Dissolve;
     OTIO_TRY_PTR(
         auto transition = new otio::Transition(n, tt, to_otio_rt(in_offset), to_otio_rt(out_offset));
-        Retainer<otio::Transition> retainer(transition);
-        return reinterpret_cast<OtioTransition*>(retainer.take_value());
+        return reinterpret_cast<OtioTransition*>(retain_for_handle(transition));
     )
 }
 
@@ -1282,7 +1321,7 @@ void otio_transition_free(OtioTransition* transition) {
     if (transition) {
         try {
             OTIO_CAST(Transition, t, transition);
-            Retainer<otio::Transition> retainer(t);
+            release_handle(t);
         } catch (...) {
         }
     }
@@ -1396,8 +1435,7 @@ int otio_track_insert_transition(OtioTrack* track, int32_t index, OtioTransition
 OtioMissingRef* otio_missing_ref_create(void) {
     OTIO_TRY_PTR(
         auto ref = new otio::MissingReference();
-        Retainer<otio::MissingReference> retainer(ref);
-        return reinterpret_cast<OtioMissingRef*>(retainer.take_value());
+        return reinterpret_cast<OtioMissingRef*>(retain_for_handle(ref));
     )
 }
 
@@ -1405,7 +1443,7 @@ void otio_missing_ref_free(OtioMissingRef* ref) {
     if (ref) {
         try {
             auto typed = reinterpret_cast<otio::MissingReference*>(ref);
-            Retainer<otio::MissingReference> retainer(typed);
+            release_handle(typed);
         } catch (...) {
         }
     }
@@ -1432,8 +1470,7 @@ OtioImageSeqRef* otio_image_seq_ref_create(const char* target_url_base,
     OTIO_TRY_PTR(
         auto ref = new otio::ImageSequenceReference(
             url, prefix, suffix, start_frame, frame_step, rate, frame_zero_padding);
-        Retainer<otio::ImageSequenceReference> retainer(ref);
-        return reinterpret_cast<OtioImageSeqRef*>(retainer.take_value());
+        return reinterpret_cast<OtioImageSeqRef*>(retain_for_handle(ref));
     )
 }
 
@@ -1441,7 +1478,7 @@ void otio_image_seq_ref_free(OtioImageSeqRef* ref) {
     if (ref) {
         try {
             auto typed = reinterpret_cast<otio::ImageSequenceReference*>(ref);
-            Retainer<otio::ImageSequenceReference> retainer(typed);
+            release_handle(typed);
         } catch (...) {
         }
     }
@@ -1702,6 +1739,7 @@ int otio_clip_set_image_sequence_reference(OtioClip* clip, OtioImageSeqRef* ref,
         auto c = reinterpret_cast<otio::Clip*>(clip);
         auto r = reinterpret_cast<otio::ImageSequenceReference*>(ref);
         c->set_media_reference(r);
+        release_handle(r);
     )
 }
 
@@ -1722,8 +1760,7 @@ OtioGeneratorRef* otio_generator_ref_create(const char* name, const char* genera
     const char* gk = generator_kind ? generator_kind : "";
     OTIO_TRY_PTR(
         auto ref = new otio::GeneratorReference(n, gk);
-        Retainer<otio::GeneratorReference> retainer(ref);
-        return reinterpret_cast<OtioGeneratorRef*>(retainer.take_value());
+        return reinterpret_cast<OtioGeneratorRef*>(retain_for_handle(ref));
     )
 }
 
@@ -1731,7 +1768,7 @@ void otio_generator_ref_free(OtioGeneratorRef* ref) {
     if (ref) {
         try {
             auto typed = reinterpret_cast<otio::GeneratorReference*>(ref);
-            Retainer<otio::GeneratorReference> retainer(typed);
+            release_handle(typed);
         } catch (...) {
         }
     }
@@ -1803,8 +1840,7 @@ OtioLinearTimeWarp* otio_linear_time_warp_create(const char* name, double time_s
     const char* n = name ? name : "";
     OTIO_TRY_PTR(
         auto effect = new otio::LinearTimeWarp(n, "", time_scalar);
-        Retainer<otio::LinearTimeWarp> retainer(effect);
-        return reinterpret_cast<OtioLinearTimeWarp*>(retainer.take_value());
+        return reinterpret_cast<OtioLinearTimeWarp*>(retain_for_handle(effect));
     )
 }
 
@@ -1812,7 +1848,7 @@ void otio_linear_time_warp_free(OtioLinearTimeWarp* effect) {
     if (effect) {
         try {
             auto typed = reinterpret_cast<otio::LinearTimeWarp*>(effect);
-            Retainer<otio::LinearTimeWarp> retainer(typed);
+            release_handle(typed);
         } catch (...) {
         }
     }
@@ -1861,8 +1897,7 @@ OtioFreezeFrame* otio_freeze_frame_create(const char* name) {
     const char* n = name ? name : "";
     OTIO_TRY_PTR(
         auto effect = new otio::FreezeFrame(n);
-        Retainer<otio::FreezeFrame> retainer(effect);
-        return reinterpret_cast<OtioFreezeFrame*>(retainer.take_value());
+        return reinterpret_cast<OtioFreezeFrame*>(retain_for_handle(effect));
     )
 }
 
@@ -1870,7 +1905,7 @@ void otio_freeze_frame_free(OtioFreezeFrame* effect) {
     if (effect) {
         try {
             auto typed = reinterpret_cast<otio::FreezeFrame*>(effect);
-            Retainer<otio::FreezeFrame> retainer(typed);
+            release_handle(typed);
         } catch (...) {
         }
     }
@@ -1903,6 +1938,7 @@ int otio_clip_add_marker(OtioClip* clip, OtioMarker* marker, OtioError* err) {
         auto c = reinterpret_cast<otio::Clip*>(clip);
         auto m = reinterpret_cast<otio::Marker*>(marker);
         c->markers().push_back(m);
+        release_handle(m);
     )
 }
 
@@ -1935,6 +1971,7 @@ int otio_clip_add_effect(OtioClip* clip, OtioEffect* effect, OtioError* err) {
         auto c = reinterpret_cast<otio::Clip*>(clip);
         auto e = reinterpret_cast<otio::Effect*>(effect);
         c->effects().push_back(e);
+        release_handle(e);
     )
 }
 
@@ -1967,6 +2004,7 @@ int otio_clip_add_linear_time_warp(OtioClip* clip, OtioLinearTimeWarp* effect, O
         auto c = reinterpret_cast<otio::Clip*>(clip);
         auto e = reinterpret_cast<otio::LinearTimeWarp*>(effect);
         c->effects().push_back(e);
+        release_handle(e);
     )
 }
 
@@ -1976,6 +2014,7 @@ int otio_clip_set_missing_reference(OtioClip* clip, OtioMissingRef* ref, OtioErr
         auto c = reinterpret_cast<otio::Clip*>(clip);
         auto r = reinterpret_cast<otio::MissingReference*>(ref);
         c->set_media_reference(r);
+        release_handle(r);
     )
 }
 
@@ -1985,6 +2024,7 @@ int otio_clip_set_generator_reference(OtioClip* clip, OtioGeneratorRef* ref, Oti
         auto c = reinterpret_cast<otio::Clip*>(clip);
         auto r = reinterpret_cast<otio::GeneratorReference*>(ref);
         c->set_media_reference(r);
+        release_handle(r);
     )
 }
 
@@ -1999,6 +2039,7 @@ int otio_track_add_marker(OtioTrack* track, OtioMarker* marker, OtioError* err) 
         auto t = reinterpret_cast<otio::Track*>(track);
         auto m = reinterpret_cast<otio::Marker*>(marker);
         t->markers().push_back(m);
+        release_handle(m);
     )
 }
 
@@ -2359,6 +2400,7 @@ int otio_track_overwrite(OtioTrack* track, OtioClip* clip,
             set_error(err, 1, status.full_description.c_str());
             return -1;
         }
+        release_handle(c);
         return 0;
     } catch (const std::exception& e) {
         set_error(err, 1, e.what());
@@ -2382,6 +2424,7 @@ int otio_track_insert_at_time(OtioTrack* track, OtioClip* clip,
             set_error(err, 1, status.full_description.c_str());
             return -1;
         }
+        release_handle(c);
         return 0;
     } catch (const std::exception& e) {
         set_error(err, 1, e.what());
