@@ -6,7 +6,10 @@
 //! handle that does not hold its own reference shows up as a use-after-free
 //! (a SIGSEGV on Linux, or a report under Valgrind or `AddressSanitizer`).
 
-use otio_rs::{Clip, ExternalReference, RationalTime, TimeRange, Timeline, Track};
+use otio_rs::{
+    Clip, ExternalReference, HasMetadata, Neighbor, NeighborGapPolicy, RationalTime, TimeRange,
+    Timeline, Track, Transition,
+};
 
 fn clip(name: &str, frames: f64) -> Clip {
     Clip::new(
@@ -79,4 +82,37 @@ fn adding_a_media_reference_keeps_the_existing_one() {
     let json = timeline.to_json_string().unwrap();
     assert!(json.contains("file:///high.mov"), "{json}");
     assert!(json.contains("file:///proxy.mov"), "{json}");
+}
+
+/// Around a transition with no neighbor, OTIO makes up a gap that is not in
+/// the track; the caller must own it, or it is deleted before Rust sees it
+#[test]
+fn generated_neighbor_gaps_are_owned() {
+    let mut timeline = Timeline::new("neighbors");
+    let mut track = timeline.add_video_track("V1");
+    track
+        .append_transition(Transition::new(
+            "dissolve",
+            "SMPTE_Dissolve",
+            RationalTime::new(8.0, 24.0),
+            RationalTime::new(12.0, 24.0),
+        ))
+        .unwrap();
+
+    let neighbors = track.neighbors_of(0, NeighborGapPolicy::AroundTransitions).unwrap();
+    let (Some(Neighbor::GeneratedGap(mut left)), Some(Neighbor::GeneratedGap(mut right))) =
+        (neighbors.left, neighbors.right)
+    else {
+        panic!("expected generated gaps on both sides of a lone transition");
+    };
+
+    left.set_metadata("side", "left");
+    right.set_metadata("side", "right");
+    assert_eq!(left.get_metadata("side").as_deref(), Some("left"));
+    assert_eq!(right.get_metadata("side").as_deref(), Some("right"));
+    drop((left, right));
+
+    assert_eq!(track.children_count(), 1);
+    drop(track);
+    timeline.to_json_string().unwrap();
 }

@@ -12,7 +12,7 @@
 #![allow(clippy::similar_names)]
 
 use otio_rs::{
-    Clip, Composable, ExternalReference, Gap, MissingReference, NeighborGapPolicy,
+    Clip, Composable, ExternalReference, Gap, MissingReference, Neighbor, NeighborGapPolicy,
     RationalTime, TimeRange, Timeline, TrackKind,
 };
 
@@ -192,13 +192,13 @@ fn test_track_neighbors_middle() {
     assert!(neighbors.left.is_some());
     assert!(neighbors.right.is_some());
 
-    if let Some(Composable::Clip(left)) = neighbors.left {
+    if let Some(Neighbor::Child(Composable::Clip(left))) = neighbors.left {
         assert_eq!(left.name(), "A");
     } else {
         panic!("Expected Clip on left");
     }
 
-    if let Some(Composable::Clip(right)) = neighbors.right {
+    if let Some(Neighbor::Child(Composable::Clip(right))) = neighbors.right {
         assert_eq!(right.name(), "C");
     } else {
         panic!("Expected Clip on right");
@@ -294,14 +294,14 @@ fn test_track_neighbors_with_gaps() {
     assert!(neighbors.right.is_some());
 
     // Left should be clip A
-    if let Some(Composable::Clip(left)) = neighbors.left {
+    if let Some(Neighbor::Child(Composable::Clip(left))) = neighbors.left {
         assert_eq!(left.name(), "A");
     } else {
         panic!("Expected Clip on left");
     }
 
     // Right should be clip B
-    if let Some(Composable::Clip(right)) = neighbors.right {
+    if let Some(Neighbor::Child(Composable::Clip(right))) = neighbors.right {
         assert_eq!(right.name(), "B");
     } else {
         panic!("Expected Clip on right");
@@ -342,7 +342,7 @@ fn test_track_neighbors_gap_as_neighbor() {
 
     // Left should be the gap
     assert!(neighbors.left.is_some());
-    if let Some(Composable::Gap(_)) = neighbors.left {
+    if let Some(Neighbor::Child(Composable::Gap(_))) = neighbors.left {
         // Good, it's a gap
     } else {
         panic!("Expected Gap on left");
@@ -532,7 +532,7 @@ fn test_neighbors_of_with_mixed_content() {
 
     // Left should be the gap at index 1
     assert!(neighbors.left.is_some());
-    if let Some(Composable::Gap(_)) = neighbors.left {
+    if let Some(Neighbor::Child(Composable::Gap(_))) = neighbors.left {
         // Good
     } else {
         panic!("Expected Gap on left of Clip B");
@@ -540,7 +540,7 @@ fn test_neighbors_of_with_mixed_content() {
 
     // Right should be the gap at index 3
     assert!(neighbors.right.is_some());
-    if let Some(Composable::Gap(_)) = neighbors.right {
+    if let Some(Neighbor::Child(Composable::Gap(_))) = neighbors.right {
         // Good
     } else {
         panic!("Expected Gap on right of Clip B");

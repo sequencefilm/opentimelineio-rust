@@ -208,12 +208,16 @@ int otio_track_clear_children(OtioTrack* track, OtioError* err);
 #define OTIO_NEIGHBOR_GAP_NEVER              0
 #define OTIO_NEIGHBOR_GAP_AROUND_TRANSITIONS 1
 
-// Neighbor result struct
+// Neighbor result struct. A neighbor with *_generated set is a gap OTIO made
+// up around a transition, not a child of the track: the caller owns one
+// reference to it and must release it with otio_gap_free
 typedef struct {
     void* left;
     int32_t left_type;
+    int32_t left_generated;
     void* right;
     int32_t right_type;
+    int32_t right_generated;
 } OtioNeighbors;
 
 // Get neighbors of a child at the given index

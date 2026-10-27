@@ -516,7 +516,7 @@ static int32_t get_composable_type(otio::Composable* comp) {
 
 OtioNeighbors otio_track_neighbors_of(OtioTrack* track, int32_t child_index,
                                        int32_t gap_policy, OtioError* err) {
-    OtioNeighbors result = {nullptr, -1, nullptr, -1};
+    OtioNeighbors result = {nullptr, -1, 0, nullptr, -1, 0};
     OTIO_NULL_CHECK_ERR(track, err, result, "Track is null");
     try {
         auto t = reinterpret_cast<otio::Track*>(track);
@@ -535,12 +535,17 @@ OtioNeighbors otio_track_neighbors_of(OtioTrack* track, int32_t child_index,
             return result;
         }
 
+        // a neighbor outside the track is a gap OTIO made up to fill a
+        // transition's offset; only the local Retainer holds it, so it would be
+        // deleted on return unless the caller's handle takes a reference
         if (left) {
-            result.left = left.value;
+            result.left_generated = left.value->parent() != t;
+            result.left = result.left_generated ? retain_for_handle(left.value) : left.value;
             result.left_type = get_composable_type(left.value);
         }
         if (right) {
-            result.right = right.value;
+            result.right_generated = right.value->parent() != t;
+            result.right = result.right_generated ? retain_for_handle(right.value) : right.value;
             result.right_type = get_composable_type(right.value);
         }
         return result;

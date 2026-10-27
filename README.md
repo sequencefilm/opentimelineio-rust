@@ -438,7 +438,7 @@ let video_count = timeline.video_tracks().len();
 Get the neighbors of a child item in a track:
 
 ```rust
-use otio_rs::{Timeline, Clip, RationalTime, TimeRange, NeighborGapPolicy, Composable};
+use otio_rs::{Timeline, Clip, RationalTime, TimeRange, NeighborGapPolicy, Composable, Neighbor};
 
 let mut timeline = Timeline::new("Test");
 let mut track = timeline.add_video_track("V1");
@@ -451,13 +451,17 @@ track.append_clip(Clip::new("C", range))?;
 // Get neighbors of clip B (index 1)
 let neighbors = track.neighbors_of(1, NeighborGapPolicy::Never)?;
 
-if let Some(Composable::Clip(left)) = neighbors.left {
+if let Some(Neighbor::Child(Composable::Clip(left))) = neighbors.left {
     println!("Left neighbor: {}", left.name()); // "A"
 }
-if let Some(Composable::Clip(right)) = neighbors.right {
+if let Some(Neighbor::Child(Composable::Clip(right))) = neighbors.right {
     println!("Right neighbor: {}", right.name()); // "C"
 }
 ```
+
+With `NeighborGapPolicy::AroundTransitions`, a transition at either end of the
+track gets a `Neighbor::GeneratedGap`: a gap OpenTimelineIO made up to cover the
+transition's offset. It is not in the track, and dropping it frees it.
 
 ## Available Range
 
@@ -617,6 +621,7 @@ Objects follow clear ownership rules across the FFI boundary:
 | `Clip::new()` | Rust owns the Clip |
 | `track.append_clip(clip)` | Track takes ownership (Clip consumed via `mem::forget`) |
 | Iterator items (`ClipRef`, `TrackRef`) | Non-owning references (lifetime tied to parent) |
+| `Neighbor::GeneratedGap` from `track.neighbors_of()` | Rust owns the Gap (OpenTimelineIO made it up; it is not in the track) |
 
 Each owning handle holds one OpenTimelineIO managed reference, taken when the shim creates or loads the object and released by its `Drop`. OpenTimelineIO deletes an object as soon as its reference count returns to 0, and calls such as `to_json_string` briefly retain and release the object they act on, so a handle without its own reference would be deleted by the first such call.
 

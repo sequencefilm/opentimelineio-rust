@@ -601,9 +601,31 @@ pub enum NeighborGapPolicy {
 #[derive(Debug)]
 pub struct Neighbors<'a> {
     /// The item before the queried child, if any.
-    pub left: Option<Composable<'a>>,
+    pub left: Option<Neighbor<'a>>,
     /// The item after the queried child, if any.
-    pub right: Option<Composable<'a>>,
+    pub right: Option<Neighbor<'a>>,
+}
+
+/// One side of [`Neighbors`].
+#[derive(Debug)]
+pub enum Neighbor<'a> {
+    /// A child of the track, borrowed from it.
+    Child(Composable<'a>),
+    /// A gap that OpenTimelineIO made up to cover a transition's offset under
+    /// [`NeighborGapPolicy::AroundTransitions`]. It is not in the track, so
+    /// the caller owns it.
+    GeneratedGap(Gap),
+}
+
+impl Neighbor<'_> {
+    fn from_ffi(ptr: *mut std::ffi::c_void, child_type: i32, generated: i32) -> Option<Self> {
+        if generated != 0 {
+            // the shim gave the generated gap a reference that this Gap now owns
+            return (!ptr.is_null()).then(|| Neighbor::GeneratedGap(Gap { ptr: ptr.cast() }));
+        }
+
+        composable_from_ffi(ptr, child_type).map(Neighbor::Child)
+    }
 }
 
 /// A track contains clips, gaps, and other items.
@@ -789,8 +811,8 @@ impl Track {
             return Err(err.into());
         }
 
-        let left = composable_from_ffi(result.left, result.left_type);
-        let right = composable_from_ffi(result.right, result.right_type);
+        let left = Neighbor::from_ffi(result.left, result.left_type, result.left_generated);
+        let right = Neighbor::from_ffi(result.right, result.right_type, result.right_generated);
 
         Ok(Neighbors { left, right })
     }
