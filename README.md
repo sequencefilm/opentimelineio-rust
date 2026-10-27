@@ -617,7 +617,7 @@ Objects follow clear ownership rules across the FFI boundary:
 | Scenario | Ownership |
 |----------|-----------|
 | `Timeline::new()` | Rust owns the Timeline |
-| `timeline.add_video_track()` | Timeline owns the Track (returns non-owning handle) |
+| `timeline.add_video_track()` | Timeline owns the Track (returns non-owning handle; its lifetime is not tied to the Timeline, so do not use it after the Timeline drops) |
 | `Clip::new()` | Rust owns the Clip |
 | `track.append_clip(clip)` | Track takes ownership (Clip consumed via `mem::forget`) |
 | Iterator items (`ClipRef`, `TrackRef`) | Non-owning references (lifetime tied to parent) |
