@@ -192,20 +192,4 @@
         return get_metadata_string_impl(reinterpret_cast<otio::Type*>(obj), key); \
     }
 
-// ============================================================================
-// Type Creation/Destruction Macros
-// ============================================================================
-
-// Generate a simple free function
-#define OTIO_FREE_IMPL(Type, ctype) \
-    void otio_##ctype##_free(Otio##Type* obj) { \
-        if (obj) { \
-            try { \
-                auto typed = reinterpret_cast<otio::Type*>(obj); \
-                Retainer<otio::Type> retainer(typed); \
-            } catch (...) { \
-            } \
-        } \
-    }
-
 #endif // OTIO_SHIM_MACROS_H

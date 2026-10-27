@@ -565,6 +565,17 @@ OtioClip* otio_clip_create(const char* name, OtioTimeRange source_range) {
     )
 }
 
+void otio_clip_free(OtioClip* clip) {
+    if (clip) {
+        try {
+            OTIO_CAST(Clip, c, clip);
+            release_handle(c);
+        } catch (...) {
+            // Ignore exceptions during cleanup
+        }
+    }
+}
+
 int otio_clip_set_media_reference(OtioClip* clip, OtioExternalRef* ref, OtioError* err) {
     OTIO_NULL_CHECK_ERR(clip, err, -1, "Clip is null");
     OTIO_NULL_CHECK_ERR(ref, err, -1, "Reference is null");
@@ -766,6 +777,17 @@ OtioGap* otio_gap_create(OtioRationalTime duration) {
         ));
         return reinterpret_cast<OtioGap*>(retain_for_handle(gap));
     )
+}
+
+void otio_gap_free(OtioGap* gap) {
+    if (gap) {
+        try {
+            OTIO_CAST(Gap, g, gap);
+            release_handle(g);
+        } catch (...) {
+            // Ignore exceptions during cleanup
+        }
+    }
 }
 
 char* otio_gap_get_name(OtioGap* gap) {

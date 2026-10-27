@@ -813,7 +813,6 @@ impl Track {
     /// # Errors
     ///
     /// Returns an error if the overwrite operation fails.
-    #[allow(clippy::forget_non_drop)]
     pub fn overwrite(
         &mut self,
         clip: Clip,
@@ -851,7 +850,6 @@ impl Track {
     /// # Errors
     ///
     /// Returns an error if the insert operation fails.
-    #[allow(clippy::forget_non_drop)]
     pub fn insert_at_time(
         &mut self,
         clip: Clip,
@@ -979,7 +977,6 @@ impl Clip {
     /// # Errors
     ///
     /// Returns an error if the media reference cannot be set.
-    #[allow(clippy::forget_non_drop)] // Reference ownership transfers to C++
     pub fn set_media_reference(&mut self, reference: ExternalReference) -> Result<()> {
         let mut err = macros::ffi_error!();
         let result =
@@ -1139,7 +1136,6 @@ impl Clip {
     /// # Errors
     ///
     /// Returns an error if the reference cannot be added.
-    #[allow(clippy::forget_non_drop)]
     pub fn add_external_reference(&mut self, key: &str, reference: ExternalReference) -> Result<()> {
         let c_key = CString::new(key).unwrap();
         let mut err = macros::ffi_error!();
@@ -1440,6 +1436,12 @@ impl Clip {
 
 traits::impl_has_metadata!(Clip, otio_clip_set_metadata_string, otio_clip_get_metadata_string);
 
+impl Drop for Clip {
+    fn drop(&mut self) {
+        unsafe { ffi::otio_clip_free(self.ptr) }
+    }
+}
+
 /// A gap represents empty space in a track.
 pub struct Gap {
     ptr: *mut ffi::OtioGap,
@@ -1461,6 +1463,12 @@ impl Gap {
 }
 
 traits::impl_has_metadata!(Gap, otio_gap_set_metadata_string, otio_gap_get_metadata_string);
+
+impl Drop for Gap {
+    fn drop(&mut self) {
+        unsafe { ffi::otio_gap_free(self.ptr) }
+    }
+}
 
 /// An external reference points to a media file.
 pub struct ExternalReference {
@@ -1534,6 +1542,12 @@ impl ExternalReference {
 }
 
 traits::impl_has_metadata!(ExternalReference, otio_external_ref_set_metadata_string, otio_external_ref_get_metadata_string);
+
+impl Drop for ExternalReference {
+    fn drop(&mut self) {
+        unsafe { ffi::otio_external_ref_free(self.ptr) }
+    }
+}
 
 /// A stack is a composition that layers its children.
 ///

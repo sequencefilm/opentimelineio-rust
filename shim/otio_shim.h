@@ -51,11 +51,13 @@ void otio_track_free(OtioTrack* track);
 
 // Clips
 OtioClip* otio_clip_create(const char* name, OtioTimeRange source_range);
+void otio_clip_free(OtioClip* clip);
 int otio_clip_set_media_reference(OtioClip* clip, OtioExternalRef* ref, OtioError* err);
 int otio_track_append_clip(OtioTrack* track, OtioClip* clip, OtioError* err);
 
 // Gaps
 OtioGap* otio_gap_create(OtioRationalTime duration);
+void otio_gap_free(OtioGap* gap);
 int otio_track_append_gap(OtioTrack* track, OtioGap* gap, OtioError* err);
 
 // Media references

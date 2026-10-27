@@ -26,7 +26,6 @@ macro_rules! impl_append {
         /// # Errors
         ///
         /// Returns an error if the operation fails.
-        #[allow(clippy::forget_non_drop)]
         pub fn $method(&mut self, child: $child_type) -> crate::Result<()> {
             let mut err = crate::macros::ffi_error!();
             let result = unsafe { crate::ffi::$ffi_fn(self.ptr, child.ptr, &mut err) };
@@ -53,7 +52,6 @@ macro_rules! impl_insert {
         /// # Errors
         ///
         /// Returns an error if the operation fails.
-        #[allow(clippy::forget_non_drop)]
         #[allow(clippy::cast_possible_truncation)]
         #[allow(clippy::cast_possible_wrap)]
         pub fn $method(&mut self, index: usize, child: $child_type) -> crate::Result<()> {
